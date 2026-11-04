@@ -1,35 +1,38 @@
-# To run the cloud version locally, first build the application using:
+# Application-only compose file. The PostgreSQL database (and optional Redis)
+# must be provided separately and referenced through environment variables.
 #
-#  ./mvnw clean package -Pcloud
-#      -DpostgreSqlJdbcUrl="jdbc:postgresql://postgres:5432/postgres"
-#      -DpostgreSqlUsername="cargotracker" -DpostgreSqlPassword="cargotracker"
+#   export DB_JDBC_URL=jdbc:postgresql://host.docker.internal:5432/postgres
+#   export DB_USER=cargotracker
+#   export DB_PASSWORD=cargotracker
+#   docker compose up --build
 #
-# Then start the services with:
-#
-#  docker compose up --build
-#
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: cargotracker
-      POSTGRES_PASSWORD: cargotracker
-      POSTGRES_DB: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-  cargotracker:
-    build: .
+  cargo-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cargo-tracker:latest
+    container_name: cargo-tracker
     ports:
       - "8080:8080"
-    depends_on:
-      - postgres
     environment:
-      DB_HOST: postgres
+      TZ: "UTC"
+      DB_JDBC_URL: "${DB_JDBC_URL:-jdbc:postgresql://host.docker.internal:5432/postgres}"
+      DB_USER: "${DB_USER:-cargotracker}"
+      DB_PASSWORD: "${DB_PASSWORD:-cargotracker}"
+      REDIS_HOST: "${REDIS_HOST:-}"
+      REDIS_PORT: "${REDIS_PORT:-6379}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cargo-tracker-uploads:/tmp/uploads
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
-  postgres-data:
+  cargo-tracker-uploads:
