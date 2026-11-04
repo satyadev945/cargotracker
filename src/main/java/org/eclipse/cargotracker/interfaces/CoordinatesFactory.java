@@ -26,6 +26,9 @@ import org.eclipse.cargotracker.domain.model.location.UnLocode;
  */
 public class CoordinatesFactory {
 
+  private static final String CACHE_KEY = "cargotracker:coordinates";
+
+  // Default data; the shared cache is Azure Cache for Redis (see RedisLookupCache) when configured.
   private static final Map<String, Coordinates> COORDINATES_MAP;
 
   private CoordinatesFactory() {
@@ -41,7 +44,24 @@ public class CoordinatesFactory {
   }
 
   public static Coordinates find(String unLocode) {
-    return COORDINATES_MAP.get(unLocode);
+    Coordinates defaults = COORDINATES_MAP.get(unLocode);
+    String cached =
+        RedisLookupCache.get(
+            CACHE_KEY,
+            unLocode,
+            defaults == null ? null : defaults.getLatitude() + "," + defaults.getLongitude());
+    if (cached == null) {
+      return null;
+    }
+    if (defaults != null && cached.equals(defaults.getLatitude() + "," + defaults.getLongitude())) {
+      return defaults;
+    }
+    try {
+      String[] parts = cached.split(",");
+      return new Coordinates(Double.parseDouble(parts[0]), Double.parseDouble(parts[1]));
+    } catch (RuntimeException e) {
+      return defaults;
+    }
   }
 
   static {
@@ -64,5 +84,10 @@ public class CoordinatesFactory {
     map.put(UNKNOWN.getUnLocode().getIdString(), new Coordinates(-90, 0)); // The South Pole.
 
     COORDINATES_MAP = Map.copyOf(map);
+
+    // Publish the defaults to the shared Redis cache so all replicas see the same data.
+    Map<String, String> seed = new HashMap<>();
+    COORDINATES_MAP.forEach((k, v) -> seed.put(k, v.getLatitude() + "," + v.getLongitude()));
+    RedisLookupCache.seed(CACHE_KEY, seed);
   }
 }

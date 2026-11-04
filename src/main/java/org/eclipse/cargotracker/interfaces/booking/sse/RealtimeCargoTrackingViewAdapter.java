@@ -1,14 +1,20 @@
 package org.eclipse.cargotracker.interfaces.booking.sse;
 
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import org.eclipse.cargotracker.domain.model.cargo.Cargo;
 import org.eclipse.cargotracker.domain.model.cargo.RoutingStatus;
 import org.eclipse.cargotracker.domain.model.cargo.TransportStatus;
+import org.eclipse.cargotracker.interfaces.RedisLookupCache;
 
 /** View adapter for displaying a cargo in a realtime tracking context. */
 public class RealtimeCargoTrackingViewAdapter {
 
+  private static final String ROUTING_LABELS_KEY = "cargotracker:routing-status-labels";
+  private static final String TRANSPORT_LABELS_KEY = "cargotracker:transport-status-labels";
+
+  // Default labels; the shared cache is Azure Cache for Redis (see RedisLookupCache) when set.
   private static final Map<RoutingStatus, String> routingStatusLabels =
       new EnumMap<>(RoutingStatus.class);
   private static final Map<TransportStatus, String> transportStatusLabels =
@@ -25,7 +31,8 @@ public class RealtimeCargoTrackingViewAdapter {
   }
 
   public String getRoutingStatus() {
-    return routingStatusLabels.get(cargo.getDelivery().getRoutingStatus());
+    RoutingStatus status = cargo.getDelivery().getRoutingStatus();
+    return RedisLookupCache.get(ROUTING_LABELS_KEY, status.name(), routingStatusLabels.get(status));
   }
 
   public boolean isMisdirected() {
@@ -33,7 +40,9 @@ public class RealtimeCargoTrackingViewAdapter {
   }
 
   public String getTransportStatus() {
-    return transportStatusLabels.get(cargo.getDelivery().getTransportStatus());
+    TransportStatus status = cargo.getDelivery().getTransportStatus();
+    return RedisLookupCache.get(
+        TRANSPORT_LABELS_KEY, status.name(), transportStatusLabels.get(status));
   }
 
   public boolean isAtDestination() {
@@ -82,5 +91,13 @@ public class RealtimeCargoTrackingViewAdapter {
     transportStatusLabels.put(TransportStatus.ONBOARD_CARRIER, "Onboard carrier");
     transportStatusLabels.put(TransportStatus.CLAIMED, "Claimed");
     transportStatusLabels.put(TransportStatus.UNKNOWN, "Unknown");
+
+    // Publish the defaults to the shared Redis cache so all replicas see the same data.
+    Map<String, String> routing = new HashMap<>();
+    routingStatusLabels.forEach((k, v) -> routing.put(k.name(), v));
+    RedisLookupCache.seed(ROUTING_LABELS_KEY, routing);
+    Map<String, String> transport = new HashMap<>();
+    transportStatusLabels.forEach((k, v) -> transport.put(k.name(), v));
+    RedisLookupCache.seed(TRANSPORT_LABELS_KEY, transport);
   }
 }
