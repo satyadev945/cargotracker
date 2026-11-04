@@ -17,8 +17,12 @@ import static org.eclipse.cargotracker.domain.model.location.SampleLocations.TOK
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.eclipse.cargotracker.domain.model.location.Location;
 import org.eclipse.cargotracker.domain.model.location.UnLocode;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
 
 /**
  * At the moment, coordinates are produced by a simple factory. It may be converted to a repository
@@ -26,7 +30,14 @@ import org.eclipse.cargotracker.domain.model.location.UnLocode;
  */
 public class CoordinatesFactory {
 
-  private static final Map<String, Coordinates> COORDINATES_MAP;
+  private static final Logger LOGGER = Logger.getLogger(CoordinatesFactory.class.getName());
+
+  // Coordinates are shared across all replicas through a Redis (ElastiCache) hash. The immutable
+  // defaults below are only seed data, and the fallback used when REDIS_HOST is not configured or
+  // Redis is unavailable.
+  private static final String REDIS_COORDINATES_KEY = "cargotracker:coordinates";
+  private static final Map<String, Coordinates> DEFAULT_COORDINATES;
+  private static final JedisPool JEDIS_POOL;
 
   private CoordinatesFactory() {
     /* Prevent instantiation. */
@@ -41,7 +52,18 @@ public class CoordinatesFactory {
   }
 
   public static Coordinates find(String unLocode) {
-    return COORDINATES_MAP.get(unLocode);
+    if (JEDIS_POOL != null) {
+      try (Jedis jedis = JEDIS_POOL.getResource()) {
+        String value = jedis.hget(REDIS_COORDINATES_KEY, unLocode);
+        if (value != null) {
+          String[] parts = value.split(",");
+          return new Coordinates(Double.parseDouble(parts[0]), Double.parseDouble(parts[1]));
+        }
+      } catch (RuntimeException e) {
+        LOGGER.log(Level.WARNING, "Redis coordinates lookup failed, using defaults.", e);
+      }
+    }
+    return DEFAULT_COORDINATES.get(unLocode);
   }
 
   static {
@@ -63,6 +85,25 @@ public class CoordinatesFactory {
     map.put(DALLAS.getUnLocode().getIdString(), new Coordinates(33, -97));
     map.put(UNKNOWN.getUnLocode().getIdString(), new Coordinates(-90, 0)); // The South Pole.
 
-    COORDINATES_MAP = Map.copyOf(map);
+    DEFAULT_COORDINATES = Map.copyOf(map);
+
+    JedisPool pool = null;
+    String redisHost = System.getenv("REDIS_HOST");
+    if (redisHost != null && !redisHost.isBlank()) {
+      try {
+        int redisPort = Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379"));
+        pool = new JedisPool(redisHost, redisPort);
+        try (Jedis jedis = pool.getResource()) {
+          Map<String, String> seed = new HashMap<>();
+          DEFAULT_COORDINATES.forEach(
+              (code, c) -> seed.put(code, c.getLatitude() + "," + c.getLongitude()));
+          // Idempotent: replicas starting concurrently write identical values.
+          jedis.hset(REDIS_COORDINATES_KEY, seed);
+        }
+      } catch (RuntimeException e) {
+        LOGGER.log(Level.WARNING, "Redis unavailable for coordinates, using defaults.", e);
+      }
+    }
+    JEDIS_POOL = pool;
   }
 }
