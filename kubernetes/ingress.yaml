@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cargo-tracker-ingress
+  namespace: cargo-tracker
+  labels:
+    app: cargo-tracker
+  annotations:
+    kubernetes.io/ingress.class: azure/application-gateway
+    appgw.ingress.kubernetes.io/backend-path-prefix: "/"
+    appgw.ingress.kubernetes.io/cookie-based-affinity: "true"
+    appgw.ingress.kubernetes.io/health-probe-path: "/rest/health"
+    appgw.ingress.kubernetes.io/request-timeout: "60"
+spec:
+  rules:
+    - host: cargo-tracker.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cargo-tracker-service
+                port:
+                  number: 80
